@@ -1,7 +1,7 @@
 /* 家計簿 — 外部サービスに依存しない、スマホ内保存のPWA */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const EXP_CATS = ['食費', '日用品', '交通', '趣味', '交際', '固定費', '医療', 'その他'];
 const INC_CATS = ['給料', '副業', '臨時収入', 'その他'];
 const BACKUP_REMIND_DAYS = 14;
@@ -182,10 +182,9 @@ function byCat(list) {
 const sortTx = list => list.slice().sort((a, b) => (b.date.localeCompare(a.date)) || (b.createdAt - a.createdAt));
 
 /* ---------- 部品 ---------- */
-function artBlock(cls) {
-  const src = S.artUrl || 'art.jpg';
-  return `<div class="blk art ${cls}"><div class="noart">art.jpg を置くか<br>設定で画像を選択</div>
-    <img src="${src}" alt="" onerror="this.remove()"></div>`;
+/* 背景の絵（設定で選んだ画像があればそれ、なければ同梱の art.jpg） */
+function applyArt() {
+  document.documentElement.style.setProperty('--art', `url("${S.artUrl || 'art.jpg'}")`);
 }
 function barsHtml(list, total) {
   if (!list.length) return '<div class="empty">まだ支出の記録がありません</div>';
@@ -228,7 +227,6 @@ function viewHome() {
   }
   const un = S.tx.filter(t => t.cat === UNCAT).length;
   if (un) h += `<button class="blk w6 banner" data-act="review" style="text-align:left"><span><b>未分類 ${un}件</b>　カテゴリを選んでください</span><span class="num">→</span></button>`;
-  h += artBlock('w2 r2');
   h += S.budget
     ? `<div class="blk w4"><div class="lbl">${now.getMonth() + 1}月の残り予算</div>
         <div class="num big ${left < 0 ? 'neg' : ''}">${yen(left)}</div>
@@ -308,9 +306,9 @@ function viewSettings() {
       <div class="sub" style="margin-top:0">最終バックアップ：${lb}　／　記録 ${S.tx.length}件</div>
       <div class="btns"><button class="btn solid" data-act="backup">書き出す</button><button class="btn" data-act="restore">読み込む</button></div>
       <p class="note">「書き出す」で共有メニューが開くので、Googleドライブ等に保存してください。機種変更やデータが消えたときは「読み込む」で元に戻せます。</p></div>
-    <div class="blk w4"><div class="lbl">アート</div>
-      <div class="btns" style="grid-template-columns:1fr"><button class="btn" data-act="artPick">画像を選ぶ</button><button class="btn" data-act="artReset">元の絵に戻す</button></div></div>
-    ${artBlock('w2')}
+    <div class="blk w6"><div class="lbl">背景の絵</div>
+      <div class="btns"><button class="btn" data-act="artPick">画像を選ぶ</button><button class="btn" data-act="artReset">元の絵に戻す</button></div>
+      <p class="note">スマホ内の好きな画像を背景にできます。元の絵はモンドリアン「赤・青・黄のコンポジション II」（1930年）です。</p></div>
     <div class="blk w6"><div class="lbl">このアプリについて</div>
       <p class="note" style="margin-top:0">データはこのスマホの中だけに保存されます（${S.persisted ? '消去されにくい設定が有効' : '保護設定は未許可。ホーム画面に追加すると有効になりやすくなります'}）。バージョン ${APP_VERSION}</p></div>`;
 }
@@ -377,6 +375,7 @@ function renderSheet() {
 
 /* ---------- 描画 ---------- */
 function render() {
+  applyArt();
   const v = { home: viewHome, calendar: viewCalendar, report: viewReport, settings: viewSettings }[S.tab];
   $('#view').innerHTML = `<div class="grid">${v()}</div>`;
   document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));

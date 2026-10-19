@@ -1,11 +1,15 @@
-/* 家計簿 — モンドリアン風グリッド。色はアート画像だけ、UIは黒と白。 */
+/* 家計簿 — モンドリアンを全面に敷き、黒枠の白い半透明カードを重ねる。UIは黒と白だけ。 */
 :root {
   --line: #111;
   --paper: #fff;
   --ink: #111;
   --mute: #7a7a7a;
   --faint: #e9e9e6;
-  --gap: 5px;
+  --gap: 10px;
+  --card: rgba(255, 255, 255, .9);
+  --card-ink: rgba(17, 17, 17, .9);
+  --bw: 3px;
+  --art: url("art.jpg");
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -17,6 +21,11 @@ body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
   font-feature-settings: "tnum";
+}
+/* 背景の絵。左寄せで白・青・黒線・赤が入るように */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1;
+  background: #111 var(--art) 18% 50% / cover no-repeat;
 }
 button, input, select { font: inherit; color: inherit; }
 button { background: none; border: 0; cursor: pointer; }
@@ -33,11 +42,11 @@ button { background: none; border: 0; cursor: pointer; }
   align-content: start;
 }
 #view { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.blk { background: var(--paper); padding: 14px; min-width: 0; }
+.blk { background: var(--card); border: var(--bw) solid var(--line); padding: 14px; min-width: 0; }
 .w6 { grid-column: span 6; } .w4 { grid-column: span 4; }
 .w3 { grid-column: span 3; } .w2 { grid-column: span 2; }
 .r2 { grid-row: span 2; }
-.ink { background: var(--line); color: var(--paper); }
+.ink { background: var(--card-ink); color: var(--paper); }
 
 .lbl { font-size: 11px; letter-spacing: .08em; color: var(--mute); margin-bottom: 6px; }
 .ink .lbl { color: #aaa; }
@@ -84,10 +93,10 @@ button { background: none; border: 0; cursor: pointer; }
 .banner button { border: 2px solid var(--paper); padding: 6px 10px; font-weight: 700; color: var(--paper); white-space: nowrap; }
 
 /* カレンダー */
-.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; background: var(--line); }
-.cal > * { background: var(--paper); min-height: 52px; padding: 4px; font-size: 11px; text-align: left; display: flex; flex-direction: column; justify-content: space-between; }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; background: var(--line); border: var(--bw) solid var(--line); }
+.cal > * { background: var(--card); min-height: 52px; padding: 4px; font-size: 11px; text-align: left; display: flex; flex-direction: column; justify-content: space-between; }
 .cal .wd { min-height: 0; padding: 6px 4px; color: var(--mute); text-align: center; display: block; }
-.cal .out { background: #f6f6f4; }
+.cal .out { background: rgba(240, 240, 236, .75); }
 .cal .dn { font-weight: 700; font-size: 12px; }
 .cal .dv { font-size: 10px; text-align: right; white-space: nowrap; overflow: hidden; }
 .cal .today .dn { text-decoration: underline; text-decoration-thickness: 2px; }
@@ -115,17 +124,17 @@ button { background: none; border: 0; cursor: pointer; }
   display: grid; grid-template-columns: 1fr 1fr 1.1fr 1fr 1fr; gap: var(--gap);
   padding: 0 var(--gap) calc(var(--gap) + var(--safe-b));
 }
-#tabbar .tab { background: var(--paper); height: 56px; font-size: 11px; font-weight: 600; position: relative; color: var(--mute); }
+#tabbar .tab { background: var(--card); border: var(--bw) solid var(--line); height: 56px; font-size: 11px; font-weight: 600; position: relative; color: var(--mute); }
 #tabbar .tab.on { color: var(--ink); }
 #tabbar .tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: var(--line); }
-#addBtn { background: var(--paper); height: 56px; font-size: 32px; font-weight: 300; outline: 3px solid var(--line); outline-offset: -9px; }
-#addBtn:active, .key:active, .cat:active { background: var(--faint); }
+#addBtn { background: var(--card); border: var(--bw) solid var(--line); height: 56px; font-size: 32px; font-weight: 300; outline: 2px solid var(--line); outline-offset: -8px; }
+#addBtn:active, .key:active, .cat:active, .tab:active { background: var(--faint); }
 
 /* ---------- 入力シート ---------- */
-#sheet { position: fixed; inset: 0; background: var(--line); z-index: 10; display: flex; justify-content: center; }
+#sheet { position: fixed; inset: 0; background: #111 var(--art) 18% 50% / cover no-repeat; z-index: 10; display: flex; justify-content: center; }
 #sheet > .grid { width: 100%; max-width: 560px; height: 100dvh; grid-auto-rows: min-content; padding-bottom: calc(var(--gap) + var(--safe-b)); overflow-y: auto; }
-.seg { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); background: var(--line); padding: 0; }
-.seg button { background: var(--paper); height: 48px; font-weight: 700; color: var(--mute); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); background: transparent; border: 0; padding: 0; }
+.seg button { background: var(--card); border: var(--bw) solid var(--line); height: 48px; font-weight: 700; color: var(--mute); }
 .seg button.on { background: var(--line); color: var(--paper); outline: 2px solid var(--paper); outline-offset: -6px; }
 .close { display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; padding: 0; height: 48px; }
 .amount { text-align: right; padding: 18px 16px; }
@@ -133,13 +142,13 @@ button { background: none; border: 0; cursor: pointer; }
 .amount .cur { font-size: 22px; margin-right: 4px; font-weight: 400; }
 .datebox { padding: 0; display: flex; align-items: center; }
 .datebox input { border: 0; width: 100%; height: 48px; padding: 0 14px; font-size: 15px; background: transparent; }
-.key { background: var(--paper); height: 64px; font-size: 24px; font-weight: 500; grid-column: span 2; }
-.next { grid-column: span 6; height: 60px; background: var(--paper); font-weight: 700; font-size: 16px; }
+.key { background: var(--card); border: var(--bw) solid var(--line); height: 64px; font-size: 24px; font-weight: 500; grid-column: span 2; }
+.next { grid-column: span 6; height: 60px; background: var(--card); border: var(--bw) solid var(--line); font-weight: 700; font-size: 16px; }
 .next:disabled { color: #bbb; }
-.cat { background: var(--paper); height: 72px; font-size: 17px; font-weight: 700; grid-column: span 3; text-align: left; padding: 0 16px; }
+.cat { background: var(--card); border: var(--bw) solid var(--line); height: 72px; font-size: 17px; font-weight: 700; grid-column: span 3; text-align: left; padding: 0 16px; }
 .cat.on { background: var(--line); color: var(--paper); }
-.del { grid-column: span 6; height: 48px; background: var(--paper); font-size: 13px; text-decoration: underline; }
-.hint { grid-column: span 6; background: var(--paper); padding: 10px 14px; font-size: 12px; color: var(--mute); }
+.del { grid-column: span 6; height: 48px; background: var(--card); border: var(--bw) solid var(--line); font-size: 13px; text-decoration: underline; }
+.hint { grid-column: span 6; background: var(--card); border: var(--bw) solid var(--line); padding: 10px 14px; font-size: 12px; color: var(--mute); }
 
 /* トースト */
 #toast { position: fixed; left: 50%; bottom: calc(80px + var(--safe-b)); transform: translateX(-50%);

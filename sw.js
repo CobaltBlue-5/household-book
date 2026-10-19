@@ -1,5 +1,5 @@
 /* オフライン対応。アプリを更新したら VERSION の数字を上げてください。 */
-const VERSION = 'kakeibo-v1';
+const VERSION = 'kakeibo-v2';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'art.jpg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
