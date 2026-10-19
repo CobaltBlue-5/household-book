@@ -1,8 +1,8 @@
 /* 家計簿 — 外部サービスに依存しない、スマホ内保存のPWA */
 'use strict';
 
-const APP_VERSION = '1.1.0';
-const EXP_CATS = ['食費', '日用品', '交通', '趣味', '交際', '固定費', '医療', 'その他'];
+const APP_VERSION = '1.2.0';
+const EXP_CATS = ['食費', '日用品', '交通', '趣味', '交際', '美容', '固定費', '医療', 'その他'];
 const INC_CATS = ['給料', '副業', '臨時収入', 'その他'];
 const BACKUP_REMIND_DAYS = 14;
 const UNCAT = '未分類';
@@ -16,6 +16,7 @@ const RULES = [
   ['食費', ['セブン', '7-ELEVEN', 'SEVEN', 'ローソン', 'LAWSON', 'ファミリーマート', 'ファミマ', 'FAMILYMART', 'ミニストップ', 'ポプラ', 'デイリーヤマザキ', 'スーパー', 'フレスタ', 'ハローズ', 'エブリイ', 'マックスバリュ', 'MAXVALU', 'イオンフード', 'コープ', '生協', 'COOP', 'ゆめマート', 'ザ・ビッグ', 'マルナカ', '業務スーパー', 'ライフ', 'マクドナルド', 'MCDONALD', 'スターバックス', 'STARBUCKS', 'ドトール', 'タリーズ', 'TULLY', 'コメダ', 'すき家', '吉野家', '松屋', 'ガスト', 'サイゼリヤ', 'ジョイフル', 'ココス', 'スシロー', 'くら寿司', 'はま寿司', 'かっぱ寿司', 'ラーメン', '餃子', '丸亀', 'モスバーガー', 'バーガー', 'BURGER', 'RESTAURANT', '精肉', '鮮魚', '青果', 'ケンタッキー', 'KFC', 'ミスタードーナツ', 'UBER EATS', 'UBEREATS', '出前館', 'WOLT', 'ベーカリー', 'カフェ', 'CAFE', 'コーヒー', 'COFFEE', '食堂', 'レストラン', '弁当']],
   ['交際', ['居酒屋', '鳥貴族', '和民', '魚民', '白木屋', '笑笑', '庄や', 'BAR', 'カラオケ', 'ビッグエコー', 'まねきねこ', 'ジャンカラ', 'フラワー', 'ギフト']],
   ['趣味', ['STEAM', 'NINTENDO', '任天堂', 'PLAYSTATION', 'SONY', 'NETFLIX', 'SPOTIFY', 'HULU', 'U-NEXT', 'DAZN', 'ABEMA', 'YOUTUBE', 'KINDLE', 'AUDIBLE', '映画', 'シネマ', 'CINEMA', 'TOHO', 'イオンシネマ', '書店', '紀伊國屋', 'ジュンク', '丸善', 'TSUTAYA', '蔦屋', 'BOOKOFF', 'ブックオフ', 'ゲーム', 'アニメイト', 'ヨドバシ', 'ビックカメラ', 'エディオン', 'ケーズデンキ', 'ヤマダ', 'スポーツ', 'ゴルフ', 'ジム', 'GYM']],
+  ['美容', ['美容', 'ヘアサロン', 'HAIR', 'SALON', 'サロン', 'まつげ', 'マツエク', 'ネイル', 'NAIL', 'エステ', 'ホットペッパービューティー']],
   ['日用品', ['ドラッグ', '薬局', 'マツモトキヨシ', 'マツキヨ', 'ウエルシア', 'ツルハ', 'コスモス', 'ダイレックス', 'サンドラッグ', 'スギ薬局', 'ココカラ', 'ダイソー', 'DAISO', 'セリア', 'キャンドゥ', 'ニトリ', '無印', 'MUJI', 'ユニクロ', 'UNIQLO', 'GU', 'しまむら', 'ホームセンター', 'コーナン', 'カインズ', 'DCM', 'ナフコ', 'AMAZON', 'アマゾン', '楽天', 'RAKUTEN', 'YAHOO', 'ロハコ', 'LOHACO', 'イオン', 'AEON', 'ゆめタウン', 'ドン・キホーテ', 'ドンキ', 'クリーニング']],
 ];
 const normShop = s => String(s || '').normalize('NFKC').toUpperCase().replace(/\s+/g, ' ').trim();
@@ -95,6 +96,7 @@ async function applyFixed() {
   let changed = false;
   for (const f of S.fixed) {
     f.done = f.done || [];
+    if (f.pay === 'card') continue; // カード払いは明細から入るので自動記録しない
     for (let ym = f.start; ym <= cur; ym = shiftYm(ym, 1)) {
       if (f.done.includes(ym)) continue;
       const day = Math.min(f.day, daysIn(ym));
@@ -118,6 +120,10 @@ function hit(n, w) {
 function classify(merchant) {
   const n = normShop(merchant);
   if (S.card.learned[n]) return S.card.learned[n];
+  for (const f of S.fixed) {
+    if (f.pay !== 'card' || !f.match) continue;
+    if (f.match.split(/[,、，]/).map(w => normShop(w)).filter(Boolean).some(w => hit(n, w))) return f.cat;
+  }
   for (const [cat, words] of RULES) if (words.some(w => hit(n, normShop(w)))) return cat;
   return UNCAT;
 }
@@ -284,17 +290,22 @@ function viewReport() {
 }
 
 function viewSettings() {
+  const fxRow = f => `<button class="row" data-act="fixedEdit" data-id="${f.id}">
+        <span class="d">${f.pay === 'card' ? 'カード' : (f.day >= 31 ? '月末' : f.day + '日')}</span><span class="c">${esc(f.name)}<small>${esc(f.cat)}</small></span>
+        <span class="a">${yen(f.amount)}</span></button>`;
+  const fxOther = S.fixed.filter(f => f.pay !== 'card'), fxCard = S.fixed.filter(f => f.pay === 'card');
+  const fxSum = l => l.reduce((a, f) => a + f.amount, 0);
   const fixedRows = S.fixed.length
-    ? '<div class="list">' + S.fixed.map(f => `<button class="row" data-act="fixedEdit" data-id="${f.id}">
-        <span class="d">${f.day >= 31 ? '月末' : f.day + '日'}</span><span class="c">${esc(f.name)}<small>${esc(f.cat)}</small></span>
-        <span class="a">${yen(f.amount)}</span></button>`).join('') + '</div>'
+    ? `<div class="sub" style="margin:0 0 6px">毎月 合計 ${yen(fxSum(S.fixed))}（自動記録 ${yen(fxSum(fxOther))}／カード払い ${yen(fxSum(fxCard))}）</div>`
+      + (fxOther.length ? `<div class="lbl" style="margin-top:10px">カード以外：毎月自動で記録</div><div class="list">${fxOther.map(fxRow).join('')}</div>` : '')
+      + (fxCard.length ? `<div class="lbl" style="margin-top:14px">カード払い：明細から取り込み、自動で分類</div><div class="list">${fxCard.map(fxRow).join('')}</div>` : '')
     : '<div class="empty">登録なし</div>';
   const lb = S.lastBackup ? new Date(S.lastBackup).toLocaleDateString('ja-JP') : 'なし';
   return `
     <div class="blk w6"><div class="lbl">毎月の予算</div>
       <div class="field"><input id="budgetIn" type="number" inputmode="numeric" min="0" placeholder="例 150000" value="${S.budget || ''}">
       <button class="btn solid" data-act="saveBudget">保存</button></div></div>
-    <div class="blk w6"><div class="lbl">固定費（毎月自動で記録）</div>${fixedRows}
+    <div class="blk w6"><div class="lbl">固定費</div>${fixedRows}
       <button class="btn wide" data-act="fixedNew">＋ 固定費を追加</button></div>
     <div class="blk w6"><div class="lbl">カード明細の自動取り込み（三井住友カード）</div>
       <div class="field"><input id="cardUrl" type="url" placeholder="連携URL（https://script.google.com/…?token=…）" value="${esc(S.card.url)}">
@@ -305,7 +316,7 @@ function viewSettings() {
     <div class="blk w6"><div class="lbl">バックアップ</div>
       <div class="sub" style="margin-top:0">最終バックアップ：${lb}　／　記録 ${S.tx.length}件</div>
       <div class="btns"><button class="btn solid" data-act="backup">書き出す</button><button class="btn" data-act="restore">読み込む</button></div>
-      <p class="note">「書き出す」で共有メニューが開くので、Googleドライブ等に保存してください。機種変更やデータが消えたときは「読み込む」で元に戻せます。</p></div>
+      <p class="note">「書き出す」で共有メニューが開くので、Googleドライブ等に保存してください。機種変更やデータが消えたときは「読み込む」で元に戻せます。固定費のファイルも「読み込む」から追加できます。</p></div>
     <div class="blk w6"><div class="lbl">背景の絵</div>
       <div class="btns"><button class="btn" data-act="artPick">画像を選ぶ</button><button class="btn" data-act="artReset">元の絵に戻す</button></div>
       <p class="note">スマホ内の好きな画像を背景にできます。元の絵はモンドリアン「赤・青・黄のコンポジション II」（1930年）です。</p></div>
@@ -361,8 +372,13 @@ function sheetFixed(s) {
     <div class="blk w6"><div class="lbl">名前</div><input class="inp" id="fName" value="${esc(s.name)}" placeholder="例 家賃・スマホ代"></div>
     <div class="blk w3"><div class="lbl">金額</div><input class="inp" id="fAmt" type="number" inputmode="numeric" value="${s.amount}" placeholder="0"></div>
     <div class="blk w3"><div class="lbl">毎月</div><select class="inp" id="fDay">${days}</select></div>
-    <div class="blk w6"><div class="lbl">カテゴリ</div><select class="inp" id="fCat">${EXP_CATS.map(c => `<option ${c === s.cat ? 'selected' : ''}>${c}</option>`).join('')}</select>
-      <p class="note">${s.id ? '変更は来月以降の記録に反映されます。' : '今月分は、指定日を過ぎていればすぐに記録されます。'}</p></div>
+    <div class="blk w6"><div class="lbl">カテゴリ</div><select class="inp" id="fCat">${EXP_CATS.map(c => `<option ${c === s.cat ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div class="blk w6"><div class="lbl">支払い方法</div><select class="inp" id="fPay">
+      <option value="other" ${s.pay !== 'card' ? 'selected' : ''}>カード以外（毎月この日に自動で記録）</option>
+      <option value="card" ${s.pay === 'card' ? 'selected' : ''}>三井住友カード（明細から取り込み）</option></select>
+      <div class="lbl" style="margin-top:12px">カード明細の店名に含まれる語（カード払いのとき）</div>
+      <input class="inp" id="fMatch" value="${esc(s.match || '')}" placeholder="例 OPENAI, CHATGPT（カンマ区切り）">
+      <p class="note">カード払いにすると自動記録はせず、明細の店名にこの語が入っていれば、このカテゴリに分類します。${s.id ? '記録済みの分は変わりません。' : 'カード以外の場合、今月分は指定日を過ぎていればすぐに記録されます。'}</p></div>
     <button class="next" data-act="saveFixed" style="background:var(--line);color:var(--paper);outline:2px solid var(--paper);outline-offset:-6px">保存</button>
     ${s.id ? '<button class="del" data-act="delFixed">この固定費を削除（記録済みの分は残ります）</button>' : ''}`;
 }
@@ -410,6 +426,7 @@ async function backup() {
 async function restore(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch (e) { toast('ファイルを読み込めませんでした'); return; }
+  if (data && data.app === 'kakeibo' && data.kind === 'fixed' && Array.isArray(data.fixed)) return importFixed(data);
   if (!data || data.app !== 'kakeibo' || !Array.isArray(data.tx)) { toast('この家計簿のバックアップではありません'); return; }
   if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleDateString('ja-JP') + ' の' : ''}バックアップ（${data.tx.length}件）で、今のデータを置き換えます。よろしいですか？`)) return;
   S.tx = data.tx; S.budget = data.budget || 0; S.fixed = data.fixed || [];
@@ -417,6 +434,24 @@ async function restore(file) {
   await DB.replaceTx(S.tx); await DB.set('budget', S.budget); await DB.set('fixed', S.fixed); await saveCard();
   await applyFixed();
   toast('バックアップから復元しました'); render();
+}
+
+/* 固定費だけのファイル：今の記録はそのままで、同じ名前のないものを追加 */
+async function importFixed(data) {
+  const names = new Set(S.fixed.map(f => f.name));
+  const add = data.fixed.filter(f => f && f.name && f.amount > 0 && !names.has(f.name));
+  if (!add.length) { toast('追加する固定費はありません（同じ名前は登録済み）'); return; }
+  if (!confirm(`固定費を${add.length}件追加します。今の記録はそのまま残ります。よろしいですか？`)) return;
+  const cur = ymOf(new Date());
+  for (const f of add) {
+    S.fixed.push({ id: uid(), name: String(f.name), amount: Math.floor(f.amount), day: Number(f.day) || 1,
+      cat: EXP_CATS.includes(f.cat) ? f.cat : '固定費', pay: f.pay === 'card' ? 'card' : 'other', match: f.match || '',
+      note: f.note || '', start: cur, done: [] });
+  }
+  await DB.set('fixed', S.fixed); await applyFixed();
+  // カード払いの固定費に当てはまる未分類の明細があれば分類し直す
+  for (const t of S.tx) if (t.src === 'card' && t.cat === UNCAT) { const c = classify(t.memo); if (c !== UNCAT) { t.cat = c; await DB.putTx(t); } }
+  toast(`固定費を${add.length}件追加しました`); render();
 }
 
 /* ---------- 操作 ---------- */
@@ -480,9 +515,12 @@ async function onAct(act, el) {
     case 'saveFixed': {
       const name = $('#fName').value.trim(), amount = Math.floor(Number($('#fAmt').value) || 0);
       if (!name || amount <= 0) { toast('名前と金額を入れてください'); return; }
-      const day = Number($('#fDay').value), cat = $('#fCat').value;
-      if (s.id) Object.assign(S.fixed.find(x => x.id === s.id), { name, amount, day, cat });
-      else S.fixed.push({ id: uid(), name, amount, day, cat, start: ymOf(new Date()), done: [] });
+      const day = Number($('#fDay').value), cat = $('#fCat').value, pay = $('#fPay').value, match = $('#fMatch').value.trim();
+      if (s.id) {
+        const f = S.fixed.find(x => x.id === s.id);
+        if (f.pay === 'card' && pay !== 'card') { f.start = ymOf(new Date()); f.done = []; } // カード以外に切り替えたら今月から記録
+        Object.assign(f, { name, amount, day, cat, pay, match });
+      } else S.fixed.push({ id: uid(), name, amount, day, cat, pay, match, start: ymOf(new Date()), done: [] });
       await DB.set('fixed', S.fixed); await applyFixed();
       closeSheet(); render(); toast('固定費を保存しました'); break;
     }
@@ -498,9 +536,34 @@ async function onAct(act, el) {
   }
 }
 
+/* 数字キーは指が触れた瞬間に反応させる（指が少し動いてもタップが取り消されないように） */
+document.addEventListener('pointerdown', e => {
+  const el = e.target.closest('.key');
+  if (!el || !S.sheet) return;
+  e.preventDefault();
+  if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) { /* noop */ } }
+  onAct('key', el).catch(err => toast('エラー：' + err.message));
+});
+/* 入力シートのボタンは、指が多少動いても離した位置が同じボタンなら押したことにする */
+let press = null;
+document.addEventListener('pointerdown', e => {
+  const el = e.target.closest('#sheet [data-act]:not(.key)');
+  press = el ? { el, x: e.clientX, y: e.clientY } : null;
+});
+document.addEventListener('pointerup', e => {
+  if (!press) return;
+  const { el, x, y } = press; press = null;
+  const over = document.elementFromPoint(e.clientX, e.clientY);
+  if (!over || over.closest('[data-act]') !== el || Math.hypot(e.clientX - x, e.clientY - y) > 30) return;
+  el.dataset.done = '1';
+  onAct(el.dataset.act, el).catch(err => { console.error(err); toast('エラー：' + err.message); });
+});
+document.addEventListener('pointercancel', () => { press = null; });
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act],[data-tab]');
-  if (!el) return;
+  if (!el || el.classList.contains('key')) return;
+  if (el.dataset.done) { delete el.dataset.done; return; } // pointerup で処理済み
+  if (el.closest('#sheet') && e.pointerType && e.pointerType !== '') return;
   const act = el.dataset.act || 'tab';
   onAct(act, el).catch(err => { console.error(err); toast('エラー：' + err.message); });
 });

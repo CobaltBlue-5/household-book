@@ -1,0 +1,123 @@
+{
+ "app": "kakeibo",
+ "kind": "fixed",
+ "version": 1,
+ "fixed": [
+  {
+   "name": "読売新聞",
+   "amount": 3800,
+   "cat": "固定費",
+   "pay": "other",
+   "day": 1
+  },
+  {
+   "name": "LPガス",
+   "amount": 6350,
+   "cat": "固定費",
+   "pay": "other",
+   "day": 1,
+   "note": "約。使用量で変動"
+  },
+  {
+   "name": "電気",
+   "amount": 3210,
+   "cat": "固定費",
+   "pay": "other",
+   "day": 1,
+   "note": "約。使用量で変動"
+  },
+  {
+   "name": "美容院",
+   "amount": 9000,
+   "cat": "美容",
+   "pay": "other",
+   "day": 1
+  },
+  {
+   "name": "まつげパーマ",
+   "amount": 7700,
+   "cat": "美容",
+   "pay": "other",
+   "day": 1
+  },
+  {
+   "name": "萩人形の会",
+   "amount": 4000,
+   "cat": "趣味",
+   "pay": "other",
+   "day": 1
+  },
+  {
+   "name": "職場の研修旅行積立",
+   "amount": 3000,
+   "cat": "その他",
+   "pay": "other",
+   "day": 1
+  },
+  {
+   "name": "水道",
+   "amount": 1000,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "水道"
+  },
+  {
+   "name": "日本通信SIM",
+   "amount": 293,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "日本通信, NIHON TSUSHIN, B-MOBILE"
+  },
+  {
+   "name": "ドコモ",
+   "amount": 5283,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "ドコモ, DOCOMO"
+  },
+  {
+   "name": "ChatGPT",
+   "amount": 3638,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "OPENAI, CHATGPT"
+  },
+  {
+   "name": "Google AI Pro",
+   "amount": 3000,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "GOOGLE ONE, GOOGLE AI"
+  },
+  {
+   "name": "Claude",
+   "amount": 3500,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "ANTHROPIC, CLAUDE",
+   "note": "約3,000〜3,500"
+  },
+  {
+   "name": "Adobe",
+   "amount": 3280,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "ADOBE"
+  },
+  {
+   "name": "note",
+   "amount": 800,
+   "cat": "固定費",
+   "pay": "card",
+   "day": 1,
+   "match": "NOTE, ノート"
+  }
+ ]
+}
