@@ -1,7 +1,21 @@
 /* 家計簿 — 外部サービスに依存しない、スマホ内保存のPWA */
 'use strict';
 
-const APP_VERSION = '1.2.0';
+/* 予期しないエラーは画面上部に表示する（原因を突き止めるため） */
+window.addEventListener('error', e => showErr(e.message + (e.lineno ? ` (${e.lineno}行目)` : '')));
+window.addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.message || e.reason)));
+function showErr(msg) {
+  let el = document.getElementById('errbar');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'errbar';
+    el.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:99;background:#fff;color:#111;border:3px solid #111;padding:10px 12px;font:12px/1.5 sans-serif;white-space:pre-wrap';
+    el.onclick = () => el.remove();
+    document.body.appendChild(el);
+  }
+  el.textContent = 'エラー（タップで閉じる）\n' + msg + '\n' + (() => { try { return 'バージョン ' + APP_VERSION; } catch (_) { return ''; } })() + ' / ' + navigator.userAgent;
+}
+
+const APP_VERSION = '1.3.0';
 const EXP_CATS = ['食費', '日用品', '交通', '趣味', '交際', '美容', '固定費', '医療', 'その他'];
 const INC_CATS = ['給料', '副業', '臨時収入', 'その他'];
 const BACKUP_REMIND_DAYS = 14;
@@ -302,6 +316,7 @@ function viewSettings() {
     : '<div class="empty">登録なし</div>';
   const lb = S.lastBackup ? new Date(S.lastBackup).toLocaleDateString('ja-JP') : 'なし';
   return `
+    <div class="blk w6 ink banner"><span>バージョン <b>${APP_VERSION}</b></span><button data-act="forceUpdate">最新版に更新</button></div>
     <div class="blk w6"><div class="lbl">毎月の予算</div>
       <div class="field"><input id="budgetIn" type="number" inputmode="numeric" min="0" placeholder="例 150000" value="${S.budget || ''}">
       <button class="btn solid" data-act="saveBudget">保存</button></div></div>
@@ -316,6 +331,7 @@ function viewSettings() {
     <div class="blk w6"><div class="lbl">バックアップ</div>
       <div class="sub" style="margin-top:0">最終バックアップ：${lb}　／　記録 ${S.tx.length}件</div>
       <div class="btns"><button class="btn solid" data-act="backup">書き出す</button><button class="btn" data-act="restore">読み込む</button></div>
+      <button class="btn wide" data-act="paste">貼り付けで読み込む</button>
       <p class="note">「書き出す」で共有メニューが開くので、Googleドライブ等に保存してください。機種変更やデータが消えたときは「読み込む」で元に戻せます。固定費のファイルも「読み込む」から追加できます。</p></div>
     <div class="blk w6"><div class="lbl">背景の絵</div>
       <div class="btns"><button class="btn" data-act="artPick">画像を選ぶ</button><button class="btn" data-act="artReset">元の絵に戻す</button></div>
@@ -424,8 +440,13 @@ async function backup() {
   toast('バックアップを書き出しました'); render();
 }
 async function restore(file) {
+  let text = '';
+  try { text = await file.text(); } catch (e) { toast('ファイルを開けませんでした'); return; }
+  return restoreText(text);
+}
+async function restoreText(text) {
   let data;
-  try { data = JSON.parse(await file.text()); } catch (e) { toast('ファイルを読み込めませんでした'); return; }
+  try { data = JSON.parse(String(text).trim().replace(/^\uFEFF/, '')); } catch (e) { toast('家計簿のファイルとして読み込めませんでした'); return; }
   if (data && data.app === 'kakeibo' && data.kind === 'fixed' && Array.isArray(data.fixed)) return importFixed(data);
   if (!data || data.app !== 'kakeibo' || !Array.isArray(data.tx)) { toast('この家計簿のバックアップではありません'); return; }
   if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleDateString('ja-JP') + ' の' : ''}バックアップ（${data.tx.length}件）で、今のデータを置き換えます。よろしいですか？`)) return;
@@ -529,7 +550,23 @@ async function onAct(act, el) {
       S.fixed = S.fixed.filter(x => x.id !== s.id); await DB.set('fixed', S.fixed);
       closeSheet(); render(); break;
     case 'backup': await backup(); break;
+    case 'forceUpdate': {
+      toast('最新版を読み込んでいます…');
+      try {
+        if (navigator.serviceWorker) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+        if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+      } catch (_) { /* noop */ }
+      location.replace(location.pathname + '?u=' + Date.now());
+      break;
+    }
     case 'restore': $('#importFile').click(); break;
+    case 'paste': {
+      let t = '';
+      try { if (navigator.clipboard && navigator.clipboard.readText) t = await navigator.clipboard.readText(); } catch (_) { /* 許可されなければ手入力へ */ }
+      if (!t || !t.trim().startsWith('{')) t = prompt('ファイルの中身（{ から始まる文字）を貼り付けてください') || '';
+      if (t.trim()) await restoreText(t);
+      break;
+    }
     case 'artPick': $('#artFile').click(); break;
     case 'artReset':
       await DB.del('artBlob'); S.artBlob = null; if (S.artUrl) URL.revokeObjectURL(S.artUrl); S.artUrl = null; render(); break;
