@@ -15,7 +15,7 @@ function showErr(msg) {
   el.textContent = 'エラー（タップで閉じる）\n' + msg + '\n' + (() => { try { return 'バージョン ' + APP_VERSION; } catch (_) { return ''; } })() + ' / ' + navigator.userAgent;
 }
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.1';
 const EXP_CATS = ['食費', '日用品', '交通', '趣味', '交際', '美容', '固定費', '医療', 'その他'];
 const INC_CATS = ['給料', '副業', '臨時収入', 'その他'];
 const BACKUP_REMIND_DAYS = 14;
@@ -88,6 +88,8 @@ const S = {
   tab: 'home', calYm: ymOf(new Date()), calDay: ymd(new Date()), repYm: ymOf(new Date()),
   sheet: null,
   card: { url: '', lastSync: 0, seen: [], learned: {}, error: '' },
+  tomb: {},   // 削除した記録・固定費の id → 削除した時刻（他の端末に削除を伝えるため）
+  sync: { on: true, rev: 0, dirty: false, last: 0, error: '', budgetAt: 0 },
 };
 
 async function load() {
@@ -99,6 +101,8 @@ async function load() {
   S.artBlob = (await DB.get('artBlob')) || null;
   if (S.artBlob) S.artUrl = URL.createObjectURL(S.artBlob);
   S.card = Object.assign(S.card, (await DB.get('card')) || {});
+  S.tomb = (await DB.get('tomb')) || {};
+  S.sync = Object.assign(S.sync, (await DB.get('sync')) || {});
   if (navigator.storage && navigator.storage.persist) {
     try { S.persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch (e) { /* noop */ }
   }
@@ -115,14 +119,16 @@ async function applyFixed() {
       if (f.done.includes(ym)) continue;
       const day = Math.min(f.day, daysIn(ym));
       if (ym === cur && day > today) continue;
-      const tx = { id: uid(), type: 'expense', amount: f.amount, cat: f.cat, date: `${ym}-${pad(day)}`, memo: f.name, fixedId: f.id, createdAt: Date.now() };
-      S.tx.push(tx);
-      await DB.putTx(tx);
+      // 端末ごとに作っても同じ id になるので、同期で二重にならない
+      const id = `fx-${f.id}-${ym}`;
+      if (!S.tomb[id] && !S.tx.some(t => t.id === id)) {
+        await putTx({ id, type: 'expense', amount: f.amount, cat: f.cat, date: `${ym}-${pad(day)}`, memo: f.name, fixedId: f.id, createdAt: Date.now() });
+      }
       f.done.push(ym);
       changed = true;
     }
   }
-  if (changed) await DB.set('fixed', S.fixed);
+  if (changed) await saveFixedList();
 }
 
 /* ---------- カード明細の自動取り込み ---------- */
@@ -160,8 +166,9 @@ async function syncCard(force) {
       if (!it.id || seen.has(it.id) || !it.amount) continue;
       seen.add(it.id);
       const cat = it.amount < 0 ? (S.card.learned[normShop(it.merchant)] || 'その他') : classify(it.merchant);
-      const tx = { id: uid(), type: 'expense', amount: it.amount, cat, date: it.date, memo: it.merchant + (it.amount < 0 ? '（取消）' : ''), src: 'card', cardId: it.id, createdAt: Date.now() };
-      S.tx.push(tx); await DB.putTx(tx);
+      const id = 'card-' + it.id; // スマホとPCの両方で取り込んでも同じ id
+      if (S.tomb[id] || S.tx.some(t => t.id === id)) continue;
+      await putTx({ id, type: 'expense', amount: it.amount, cat, date: it.date, memo: it.merchant + (it.amount < 0 ? '（取消）' : ''), src: 'card', cardId: it.id, createdAt: Date.now() });
       added++; if (cat === UNCAT) unc++;
     }
     c.seen = [...seen].slice(-3000);
@@ -178,14 +185,107 @@ async function syncCard(force) {
 async function learn(merchant, cat) {
   const n = normShop(merchant.replace(/（取消）$/, ''));
   if (!n || cat === UNCAT) return 0;
-  S.card.learned[n] = cat; await saveCard();
+  S.card.learned[n] = cat; await saveCard(); markDirty();
   let k = 0;
   for (const t of S.tx) {
-    if (t.src === 'card' && t.cat === UNCAT && normShop(t.memo) === n) { t.cat = cat; await DB.putTx(t); k++; }
+    if (t.src === 'card' && t.cat === UNCAT && normShop(t.memo) === n) { t.cat = cat; await putTx(t); k++; }
   }
   return k;
 }
 const uncats = () => sortTx(S.tx.filter(t => t.cat === UNCAT)).reverse();
+
+/* ---------- 記録の保存（変更は他の端末にも同期される） ---------- */
+async function putTx(tx) {
+  tx.updatedAt = Date.now();
+  const i = S.tx.findIndex(x => x.id === tx.id);
+  if (i >= 0) S.tx[i] = tx; else S.tx.push(tx);
+  await DB.putTx(tx); markDirty();
+}
+async function removeTx(id) {
+  S.tx = S.tx.filter(x => x.id !== id);
+  S.tomb[id] = Date.now();
+  await DB.delTx(id); await DB.set('tomb', S.tomb); markDirty();
+}
+async function saveFixedList() { await DB.set('fixed', S.fixed); markDirty(); }
+let syncTimer;
+function markDirty() {
+  S.sync.dirty = true; DB.set('sync', S.sync).catch(() => {});
+  clearTimeout(syncTimer); syncTimer = setTimeout(() => syncData(false), 1500);
+}
+
+/* ---------- 端末間の同期（あなたのGoogleドライブの1ファイルを介して） ---------- */
+const ts = x => x.updatedAt || x.createdAt || 0;
+function snapshot() {
+  return { v: 1, tx: S.tx, tomb: S.tomb, fixed: S.fixed, budget: { value: S.budget, at: S.sync.budgetAt || 0 },
+    learned: S.card.learned, seen: S.card.seen };
+}
+function mergeList(a, b, tomb) {
+  const m = new Map();
+  for (const x of [...(a || []), ...(b || [])]) { const y = m.get(x.id); if (!y || ts(x) > ts(y)) m.set(x.id, x); }
+  return [...m.values()].filter(x => !(tomb[x.id] && tomb[x.id] >= ts(x)));
+}
+/* 両方の内容を突き合わせ、記録ごとに新しい方を残す。削除はどちらで行っても反映 */
+function mergeSnap(l, r) {
+  if (!r) return l;
+  const tomb = Object.assign({}, r.tomb || {});
+  for (const [k, v] of Object.entries(l.tomb || {})) tomb[k] = Math.max(tomb[k] || 0, v);
+  const allFixed = [...(l.fixed || []), ...(r.fixed || [])];
+  const fixed = mergeList(l.fixed, r.fixed, tomb).map(f =>
+    Object.assign({}, f, { done: [...new Set(allFixed.filter(x => x.id === f.id).flatMap(x => x.done || []))].sort() }));
+  const lb = l.budget || { value: 0, at: 0 }, rb = r.budget || { value: 0, at: 0 };
+  return { v: 1, tx: mergeList(l.tx, r.tx, tomb), tomb, fixed, budget: rb.at > lb.at ? rb : lb,
+    learned: Object.assign({}, r.learned || {}, l.learned || {}),
+    seen: [...new Set([...(r.seen || []), ...(l.seen || [])])].slice(-5000) };
+}
+function canon(d) {
+  if (!d) return '';
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const keys = o => Object.keys(o || {}).sort().map(k => [k, o[k]]);
+  return JSON.stringify([(d.tx || []).slice().sort(byId), keys(d.tomb), (d.fixed || []).slice().sort(byId),
+    d.budget || null, keys(d.learned), (d.seen || []).slice().sort()]);
+}
+async function applySnap(m) {
+  if (canon(m) === canon(snapshot())) return false;
+  S.tx = m.tx; S.tomb = m.tomb; S.fixed = m.fixed;
+  S.budget = (m.budget && m.budget.value) || 0; S.sync.budgetAt = (m.budget && m.budget.at) || 0;
+  S.card.learned = m.learned || {}; S.card.seen = m.seen || [];
+  await DB.replaceTx(S.tx); await DB.set('tomb', S.tomb); await DB.set('fixed', S.fixed);
+  await DB.set('budget', S.budget); await saveCard();
+  return true;
+}
+const apiUrl = (base, q) => base + (base.includes('?') ? '&' : '?') + new URLSearchParams(q).toString();
+const apiErr = e => (e === 'token' ? '合言葉（token）が一致しません' : e === 'unknown action' ? 'スクリプトが古い版です（Code.gs を更新してください）' : e);
+let dataSyncing = false;
+async function syncData(force) {
+  const url = S.card.url;
+  if (!url || !S.sync.on || dataSyncing || !navigator.onLine) return;
+  dataSyncing = true; clearTimeout(syncTimer);
+  let changed = false;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await (await fetch(apiUrl(url, { action: 'load', t: Date.now() }), { cache: 'no-store' })).json();
+      if (!r.ok) throw new Error(apiErr(r.error));
+      const merged = mergeSnap(snapshot(), r.data);
+      if (await applySnap(merged)) changed = true;
+      if (r.data && canon(merged) === canon(r.data)) { S.sync.rev = r.rev; S.sync.dirty = false; break; }
+      const w = await (await fetch(apiUrl(url, { action: 'save' }), {
+        method: 'POST', body: JSON.stringify({ action: 'save', baseRev: r.rev, data: merged }) })).json();
+      if (w.ok) { S.sync.rev = w.rev; S.sync.dirty = false; break; }
+      if (w.error !== 'conflict') throw new Error(apiErr(w.error));
+      // 別の端末が同時に保存した → 読み直してもう一度
+    }
+    S.sync.last = Date.now(); S.sync.error = '';
+    if (force) toast('同期しました');
+  } catch (e) {
+    S.sync.error = e.message || String(e);
+    if (force) toast('同期できませんでした：' + S.sync.error);
+  } finally {
+    dataSyncing = false;
+    await DB.set('sync', S.sync);
+    const typing = document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+    if ((changed || S.tab === 'settings') && !typing) render();
+  }
+}
 
 /* ---------- 集計 ---------- */
 const inMonth = ym => S.tx.filter(t => t.date.startsWith(ym));
@@ -322,12 +422,14 @@ function viewSettings() {
       <button class="btn solid" data-act="saveBudget">保存</button></div></div>
     <div class="blk w6"><div class="lbl">固定費</div>${fixedRows}
       <button class="btn wide" data-act="fixedNew">＋ 固定費を追加</button></div>
-    <div class="blk w6"><div class="lbl">カード明細の自動取り込み（三井住友カード）</div>
+    <div class="blk w6"><div class="lbl">Google連携（カード明細の取り込み・PCとの同期）</div>
       <div class="field"><input id="cardUrl" type="url" placeholder="連携URL（https://script.google.com/…?token=…）" value="${esc(S.card.url)}">
       <button class="btn solid" data-act="saveCardUrl">保存</button></div>
       <div class="sub">${S.card.url ? (S.card.lastSync ? '最終同期：' + new Date(S.card.lastSync).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '未同期') : '未設定'}${S.card.error ? '　／　<b style="color:var(--ink)">エラー：' + esc(S.card.error) + '</b>' : ''}　／　覚えた店 ${Object.keys(S.card.learned).length}件</div>
-      ${S.card.url ? '<button class="btn wide" data-act="syncNow">今すぐ同期</button>' : ''}
-      <p class="note">アプリを開くたびに新しい利用分を取り込みます。カードで払っている家賃やサブスクは、固定費に登録しなくて大丈夫です（二重になります）。</p></div>
+      ${S.card.url ? `<label class="field" style="align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="syncOn" ${S.sync.on ? 'checked' : ''} style="flex:none;width:22px;height:22px;border:2px solid var(--line)"> PCなど他の端末と記録を同期する</label>
+      <div class="sub">${S.sync.on ? (S.sync.last ? '端末間の最終同期：' + new Date(S.sync.last).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '端末間：未同期') + (S.sync.dirty ? '（未送信の変更あり）' : '') : '端末間の同期：オフ'}${S.sync.error ? '　／　<b style="color:var(--ink)">エラー：' + esc(S.sync.error) + '</b>' : ''}</div>
+      <button class="btn wide" data-act="syncNow">今すぐ同期</button>` : ''}
+      <p class="note">アプリを開くたびに新しいカード利用分を取り込み、PCなど同じURLを設定した端末と記録を揃えます。記録はあなたのGoogleドライブの「kakeibo-sync.json」に保存されます。</p></div>
     <div class="blk w6"><div class="lbl">バックアップ</div>
       <div class="sub" style="margin-top:0">最終バックアップ：${lb}　／　記録 ${S.tx.length}件</div>
       <div class="btns"><button class="btn solid" data-act="backup">書き出す</button><button class="btn" data-act="restore">読み込む</button></div>
@@ -364,13 +466,15 @@ function sheetTx(s) {
   let h = `<div class="blk w4 seg"><button data-act="type" data-v="expense" class="${s.type === 'expense' ? 'on' : ''}">支出</button>
            <button data-act="type" data-v="income" class="${s.type === 'income' ? 'on' : ''}">収入</button></div>
            <button class="blk w2 close" data-act="close">閉じる</button>
-           <div class="blk w6 amount"><span class="num"><span class="cur">${neg ? '−' : ''}¥</span>${Math.abs(amt).toLocaleString('ja-JP')}</span></div>`;
+           <label class="blk w6 amount"><span class="num"><span class="cur">${neg ? '−' : ''}¥</span><input id="amtIn" class="amtin" type="text" inputmode="numeric" autocomplete="off"
+             value="${amt ? Math.abs(amt).toLocaleString('ja-JP') : ''}" placeholder="0" aria-label="金額"></span></label>`;
   if (s.src === 'card') h += `<div class="hint" style="color:var(--ink)">カード：${esc(s.memo)}</div>`;
   if (s.step === 1) {
     h += `<label class="blk w6 datebox"><input type="date" id="dateIn" value="${s.date}" aria-label="日付"></label>`;
     h += ['7', '8', '9', '4', '5', '6', '1', '2', '3', '00', '0', '⌫'].map(k => `<button class="key" data-act="key" data-k="${k}">${k}</button>`).join('');
     h += `<button class="next" data-act="next" ${amt ? '' : 'disabled'}>カテゴリを選ぶ →</button>`;
     if (s.id) h += `<button class="del" data-act="delTx">この記録を削除</button>`;
+    h += `<div class="hint" id="dbg" style="font-size:10px;line-height:1.5;word-break:break-all"></div>`;
   } else {
     const cats = s.type === 'expense' ? EXP_CATS : INC_CATS;
     const left = s.review ? uncats().length : 0;
@@ -403,7 +507,25 @@ function renderSheet() {
   if (!s) { el.hidden = true; el.innerHTML = ''; return; }
   el.hidden = false;
   el.innerHTML = `<div class="grid">${s.kind === 'tx' ? sheetTx(s) : sheetFixed(s)}</div>`;
+  showDbg();
 }
+/* ---- 診断：入力画面が受け取ったタッチ操作を表示（原因調査用） ---- */
+const evlog = [];
+function descEl(t) {
+  if (!t || t.nodeType !== 1) return String(t && t.nodeName);
+  const c = typeof t.className === 'string' && t.className ? '.' + t.className.trim().split(/\s+/).join('.') : '';
+  return t.tagName.toLowerCase() + (t.id ? '#' + t.id : '') + c + (t.dataset && t.dataset.k ? '[' + t.dataset.k + ']' : '');
+}
+function showDbg() {
+  const d = document.getElementById('dbg');
+  if (d) d.textContent = '診断 ' + APP_VERSION + '：' + (evlog.length ? evlog.join(' ／ ') : 'まだタッチを受け取っていません');
+}
+['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(type => document.addEventListener(type, e => {
+  if (!S.sheet) return;
+  evlog.push(type.replace('down', '↓').replace('start', '↓') + ' ' + descEl(e.target));
+  if (evlog.length > 4) evlog.shift();
+  showDbg();
+}, { capture: true, passive: true }));
 
 /* ---------- 描画 ---------- */
 function render() {
@@ -452,8 +574,10 @@ async function restoreText(text) {
   if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleDateString('ja-JP') + ' の' : ''}バックアップ（${data.tx.length}件）で、今のデータを置き換えます。よろしいですか？`)) return;
   S.tx = data.tx; S.budget = data.budget || 0; S.fixed = data.fixed || [];
   if (data.card) { S.card.learned = data.card.learned || {}; S.card.seen = data.card.seen || []; S.card.lastSync = data.card.lastSync || 0; }
+  const t0 = Date.now();
+  S.tx.forEach(t => { t.updatedAt = t0; }); S.fixed.forEach(f => { f.updatedAt = t0; }); S.sync.budgetAt = t0;
   await DB.replaceTx(S.tx); await DB.set('budget', S.budget); await DB.set('fixed', S.fixed); await saveCard();
-  await applyFixed();
+  markDirty(); await applyFixed();
   toast('バックアップから復元しました'); render();
 }
 
@@ -467,11 +591,11 @@ async function importFixed(data) {
   for (const f of add) {
     S.fixed.push({ id: uid(), name: String(f.name), amount: Math.floor(f.amount), day: Number(f.day) || 1,
       cat: EXP_CATS.includes(f.cat) ? f.cat : '固定費', pay: f.pay === 'card' ? 'card' : 'other', match: f.match || '',
-      note: f.note || '', start: cur, done: [] });
+      note: f.note || '', start: cur, done: [], updatedAt: Date.now() });
   }
-  await DB.set('fixed', S.fixed); await applyFixed();
+  await saveFixedList(); await applyFixed();
   // カード払いの固定費に当てはまる未分類の明細があれば分類し直す
-  for (const t of S.tx) if (t.src === 'card' && t.cat === UNCAT) { const c = classify(t.memo); if (c !== UNCAT) { t.cat = c; await DB.putTx(t); } }
+  for (const t of S.tx) if (t.src === 'card' && t.cat === UNCAT) { const c = classify(t.memo); if (c !== UNCAT) { t.cat = c; await putTx(t); } }
   toast(`固定費を${add.length}件追加しました`); render();
 }
 
@@ -488,10 +612,10 @@ async function onAct(act, el) {
       const v = $('#cardUrl').value.trim();
       if (v && !/^https:\/\/script\.google(usercontent)?\.com\//.test(v)) { toast('Google Apps ScriptのURLを入れてください'); return; }
       S.card.url = v; S.card.error = ''; await saveCard(); render();
-      if (v) await syncCard(true); else toast('連携を解除しました');
+      if (v) { await syncData(false); await applyFixed(); await syncCard(true); } else toast('連携を解除しました');
       break;
     }
-    case 'syncNow': await syncCard(true); break;
+    case 'syncNow': await syncData(true); await applyFixed(); await syncCard(false); render(); break;
     case 'type': s.type = el.dataset.v; s.cat = null; renderSheet(); break;
     case 'key': {
       const k = el.dataset.k;
@@ -507,8 +631,7 @@ async function onAct(act, el) {
       if (s.fixedId) tx.fixedId = s.fixedId;
       if (s.src) { tx.src = s.src; tx.cardId = s.cardId; }
       const i = S.tx.findIndex(x => x.id === tx.id);
-      if (i >= 0) S.tx[i] = tx; else S.tx.push(tx);
-      await DB.putTx(tx);
+      await putTx(tx);
       const also = tx.src === 'card' ? await learn(tx.memo, tx.cat) : 0;
       let msg = `${tx.cat} ${yen(tx.amount)} を${i >= 0 ? '更新' : '記録'}しました`;
       if (also) msg = `${tx.cat}に分類（同じ店の${also}件も）`;
@@ -522,14 +645,14 @@ async function onAct(act, el) {
     }
     case 'delTx':
       if (!confirm('この記録を削除しますか？')) return;
-      S.tx = S.tx.filter(x => x.id !== s.id); await DB.delTx(s.id);
+      await removeTx(s.id);
       closeSheet(); render(); toast('削除しました'); break;
     case 'calnav': S.calYm = shiftYm(S.calYm, +el.dataset.k); render(); break;
     case 'repnav': S.repYm = shiftYm(S.repYm, +el.dataset.k); render(); break;
     case 'day': S.calDay = el.dataset.d; render(); break;
     case 'saveBudget': {
       const v = Math.max(0, Math.floor(Number($('#budgetIn').value) || 0));
-      S.budget = v; await DB.set('budget', v); toast(v ? `予算を ${yen(v)} にしました` : '予算を解除しました'); render(); break;
+      S.budget = v; S.sync.budgetAt = Date.now(); await DB.set('budget', v); markDirty(); toast(v ? `予算を ${yen(v)} にしました` : '予算を解除しました'); render(); break;
     }
     case 'fixedNew': openFixed(null); break;
     case 'fixedEdit': { const f = S.fixed.find(x => x.id === el.dataset.id); if (f) openFixed(f); break; }
@@ -540,14 +663,14 @@ async function onAct(act, el) {
       if (s.id) {
         const f = S.fixed.find(x => x.id === s.id);
         if (f.pay === 'card' && pay !== 'card') { f.start = ymOf(new Date()); f.done = []; } // カード以外に切り替えたら今月から記録
-        Object.assign(f, { name, amount, day, cat, pay, match });
-      } else S.fixed.push({ id: uid(), name, amount, day, cat, pay, match, start: ymOf(new Date()), done: [] });
-      await DB.set('fixed', S.fixed); await applyFixed();
+        Object.assign(f, { name, amount, day, cat, pay, match, updatedAt: Date.now() });
+      } else S.fixed.push({ id: uid(), name, amount, day, cat, pay, match, start: ymOf(new Date()), done: [], updatedAt: Date.now() });
+      await saveFixedList(); await applyFixed();
       closeSheet(); render(); toast('固定費を保存しました'); break;
     }
     case 'delFixed':
       if (!confirm('この固定費を削除しますか？')) return;
-      S.fixed = S.fixed.filter(x => x.id !== s.id); await DB.set('fixed', S.fixed);
+      S.fixed = S.fixed.filter(x => x.id !== s.id); S.tomb[s.id] = Date.now(); await DB.set('tomb', S.tomb); await saveFixedList();
       closeSheet(); render(); break;
     case 'backup': await backup(); break;
     case 'forceUpdate': {
@@ -573,13 +696,31 @@ async function onAct(act, el) {
   }
 }
 
-/* 数字キーは指が触れた瞬間に反応させる（指が少し動いてもタップが取り消されないように） */
-document.addEventListener('pointerdown', e => {
-  const el = e.target.closest('.key');
+/* 数字キー：指が触れた瞬間に反応。端末によって届くイベントが違うので複数を待ち受け、1回のタップは1回だけ数える */
+const keyDone = new WeakSet();
+let lastTouch = 0;
+function keyPress(e) {
+  const el = e.target && e.target.closest && e.target.closest('.key');
   if (!el || !S.sheet) return;
-  e.preventDefault();
+  const touchy = e.type === 'touchstart' || (e.type === 'pointerdown' && e.pointerType !== 'mouse');
+  if (touchy) lastTouch = Date.now();
+  // タッチの後に遅れて届くマウス互換イベントは、作り直した次のボタンに当たるので数えない
+  if ((e.type === 'mousedown' || e.type === 'click') && Date.now() - lastTouch < 800) return;
+  if (e.cancelable && e.type !== 'click') e.preventDefault();
+  if (keyDone.has(el)) return; // 同じタップの2つ目以降のイベント（押すたびにボタンは作り直される）
+  keyDone.add(el);
   if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) { /* noop */ } }
   onAct('key', el).catch(err => toast('エラー：' + err.message));
+}
+['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(t => document.addEventListener(t, keyPress, { passive: false }));
+/* 金額欄をタップしたときは、スマホの数字キーボードでも入力できる */
+document.addEventListener('input', e => {
+  if (e.target.id !== 'amtIn' || !S.sheet) return;
+  const digits = e.target.value.replace(/[^0-9０-９]/g, '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/^0+/, '').slice(0, 9);
+  S.sheet.amt = digits;
+  e.target.value = digits ? Number(digits).toLocaleString('ja-JP') : '';
+  const nx = document.querySelector('#sheet [data-act=next]');
+  if (nx) nx.disabled = !digits;
 });
 /* 入力シートのボタンは、指が多少動いても離した位置が同じボタンなら押したことにする */
 let press = null;
@@ -605,6 +746,7 @@ document.addEventListener('click', e => {
   onAct(act, el).catch(err => { console.error(err); toast('エラー：' + err.message); });
 });
 document.addEventListener('change', e => {
+  if (e.target.id === 'syncOn') { S.sync.on = e.target.checked; DB.set('sync', S.sync); if (S.sync.on) syncData(true); else render(); return; }
   if (e.target.id === 'dateIn' && S.sheet) S.sheet.date = e.target.value || S.sheet.date;
 });
 $('#importFile').addEventListener('change', async e => {
@@ -623,12 +765,17 @@ window.addEventListener('popstate', () => { if (S.sheet) { S.sheet = null; rende
 
 /* 日付が変わったら固定費を再チェック */
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible') { await applyFixed(); render(); syncCard(false); }
+  if (document.visibilityState === 'visible') { await syncData(false); await applyFixed(); render(); syncCard(false); }
+  else if (S.sync.dirty) syncData(false); // 閉じる前に未送信の変更を送る
 });
 
 (async function init() {
-  try { await load(); await applyFixed(); }
+  try { await load(); }
   catch (e) { console.error(e); toast('データを開けませんでした'); }
+  render();
+  // 先に他の端末の変更を受け取ってから、固定費とカード明細を処理（二重登録を防ぐ）
+  await syncData(false);
+  try { await applyFixed(); } catch (e) { console.error(e); }
   render();
   syncCard(false);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

@@ -1,5 +1,5 @@
 /* オフライン対応。電波があるときは常に最新版を読み込み、オフラインのときだけ保存済みの版を使う。 */
-const VERSION = 'kakeibo-v6';
+const VERSION = 'kakeibo-v8';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'art.jpg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
